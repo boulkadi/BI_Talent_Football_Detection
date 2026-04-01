@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+
+  postgres:
+    image: postgres:15
+    container_name: football_postgres
+    restart: always
+
+    environment:
+      POSTGRES_USER: football_user
+      POSTGRES_PASSWORD: football_pass
+      POSTGRES_DB: football_db
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../src/database_sql:/docker-entrypoint-initdb.d
+    networks:
+      - football_net
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: football_pgadmin
+    restart: always
+    environment:
+      # Ces identifiants servent uniquement à se connecter à l'INTERFACE pgAdmin
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "8081:80" # On utilise 8081 pour éviter les conflits avec Airflow (8080)
+    networks:
+      - football_net
+    depends_on:
+      - postgres
+
+networks:
+  football_net:
+
+
+volumes:
+  postgres_data:
