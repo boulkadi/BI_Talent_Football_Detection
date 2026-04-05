@@ -18,6 +18,9 @@ dependencies = [
     # Database
     "psycopg2-binary>=2.9.9",
     "sqlalchemy>=2.0.0",
+    # Dashboard
+    "streamlit>=1.30.0",
+    "plotly>=5.18.0",
     # Utils
     "python-dotenv>=1.0.0",
     "fuzzywuzzy>=0.18.0",

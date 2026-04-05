@@ -150,8 +150,6 @@ class DataTransformer:
             # Calcul : Année de la saison (ex: 2024) - Année de naissance
             df["player_age_at_season"] = df["season_id"].astype(int) - df["birth_year"]
             
-            # Nettoyage
-            df = df.drop(columns=["birth_year"])
             # "ENG-Premier League" -> "ENG"
             df["country"] = df["league"].str.split("-").str[0]
 

@@ -1,117 +1,162 @@
 -- =========================================================
--- STAGING LAYER  –  Données nettoyées, typées et validées
+-- STAGING LAYER  –  Dimensions et table de faits
+-- Extrait du backup pgAdmin du 2026-04-04 15:00:17 UTC
 -- =========================================================
 
-CREATE TABLE IF NOT EXISTS staging.player_stats (
-
-    -- ── Clé technique ──────────────────────────────────────
-    id                              BIGSERIAL       PRIMARY KEY,
-
-    -- ── Tracking de la pipeline ────────────────────────────
-    _loaded_at                      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    _raw_batch_id                   UUID,
-
-    -- ── Clé naturelle (contrainte UNIQUE pour UPSERT) ──────
-    league                          TEXT            NOT NULL,
-    league_id                       TEXT         NOT NULL,
-    country                         TEXT,           NOT NULL,
-    season_id                       TEXT         NOT NULL,
-    player                          TEXT            NOT NULL,
-    player_id                       TEXT         NOT NULL,
-    team                            TEXT            NOT NULL,
-    team_id                         TEXT         NOT NULL,
-
-    -- ── Identité SofaScore ─────────────────────────────────
-    name_sofascore                  TEXT,
-    nationality                     TEXT,
-    birth_year                      INTEGER,
-    player_age_at_season            SMALLINT        CHECK (player_age_at_season BETWEEN 10 AND 60),
-    height                          SMALLINT        CHECK (height BETWEEN 140 AND 230),
-    weight                          SMALLINT        CHECK (weight BETWEEN 40 AND 150),
-    preferred_foot                  TEXT,
-
-    -- ── Position (standardisée) ────────────────────────────
-    position_current                TEXT,
-    position_standard               TEXT            CHECK (position_standard IN (
-                                        'Goalkeeper', 'Defender', 'Midfielder', 'Forward'
-                                    )),
-    position_description            TEXT,
-    detailed_positions_current      TEXT,
-
-    -- ── Statistiques de volume ─────────────────────────────
-    matches                         SMALLINT        NOT NULL DEFAULT 0 CHECK (matches >= 0),
-    minutes                         INTEGER         NOT NULL DEFAULT 0 CHECK (minutes >= 0),
-    goals                           SMALLINT        NOT NULL DEFAULT 0 CHECK (goals >= 0),
-    assists                         SMALLINT        NOT NULL DEFAULT 0 CHECK (assists >= 0),
-    shots                           SMALLINT        NOT NULL DEFAULT 0 CHECK (shots >= 0),
-    key_passes                      SMALLINT        NOT NULL DEFAULT 0 CHECK (key_passes >= 0),
-    yellow_cards                    SMALLINT        DEFAULT 0 CHECK (yellow_cards >= 0),
-    red_cards                       SMALLINT        DEFAULT 0 CHECK (red_cards >= 0),
-    np_goals                        SMALLINT        DEFAULT 0 CHECK (np_goals >= 0),
-
-    -- ── Métriques xG ───────────────────────────────────────
-    xg                              NUMERIC(8,4)   NOT NULL DEFAULT 0,
-    xa                              NUMERIC(8,4)   NOT NULL DEFAULT 0,
-    xg_chain                        NUMERIC(8,4)   DEFAULT 0,
-    xg_buildup                      NUMERIC(8,4)   DEFAULT 0,
-    np_xg                           NUMERIC(8,4)   DEFAULT 0,
-
-    -- ── KPIs per-90 ───────────────────────────────────────
-    goals_per_90                    NUMERIC(6,3),
-    xg_per_90                       NUMERIC(6,3),
-    np_goals_per_90                 NUMERIC(6,3),
-    np_xg_per_90                    NUMERIC(6,3),
-    assists_per_90                  NUMERIC(6,3),
-    xa_per_90                       NUMERIC(6,3),
-    shots_per_90                    NUMERIC(6,3),
-    key_passes_per_90               NUMERIC(6,3),
-    involvement_per_90              NUMERIC(6,3),
-
-    -- ── KPIs d'efficacité ──────────────────────────────────
-    finishing_efficiency            NUMERIC(8,4),
-    np_finishing_efficiency         NUMERIC(8,4),
-    playmaking_efficiency           NUMERIC(8,4),
-    shot_conversion                 NUMERIC(8,4),
-
-    -- ── KPIs collectifs ───────────────────────────────────
-    involvement_index               NUMERIC(10,3),
-    direct_contribution             SMALLINT,
-    expected_contribution           NUMERIC(8,3),
-    offensive_volume                SMALLINT,
-
-    -- ── Données marché (SofaScore) ────────────────────────
-    market_value_current            NUMERIC(15,2),
-    popularity_score_current        INTEGER         CHECK (popularity_score_current >= 0),
-    contract_end_date_current       DATE,
-
-    -- ── Contrainte d'unicité métier ───────────────────────
-    CONSTRAINT uq_staging_player_season
-        UNIQUE (league, season_id, player, team)
+-- =========================================================
+-- DIMENSION – Ligues
+-- =========================================================
+CREATE TABLE IF NOT EXISTS staging.dim_league (
+    league_id text NOT NULL,
+    league text NOT NULL,
+    country text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT dim_league_pkey PRIMARY KEY (league_id),
+    CONSTRAINT dim_league_league_key UNIQUE (league)
 );
 
--- ---------------------------------------------------------
--- Indexes pour performance
--- ---------------------------------------------------------
-CREATE INDEX IF NOT EXISTS idx_staging_player_stats_league_season
-    ON staging.player_stats (league, season_id);
+-- =========================================================
+-- DIMENSION – Saisons
+-- =========================================================
+CREATE TABLE IF NOT EXISTS staging.dim_season (
+    season_id integer NOT NULL,
+    season text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT dim_season_pkey PRIMARY KEY (season_id)
+);
 
-CREATE INDEX IF NOT EXISTS idx_staging_player_stats_player
-    ON staging.player_stats (player);
+-- =========================================================
+-- DIMENSION – Équipes
+-- =========================================================
+CREATE TABLE IF NOT EXISTS staging.dim_team (
+    team_id integer NOT NULL,
+    team text NOT NULL,
+    country text,
+    league_id text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT dim_team_pkey PRIMARY KEY (team_id),
+    CONSTRAINT uq_dim_team_name_league UNIQUE (team, league_id),
+    CONSTRAINT dim_team_league_id_fkey FOREIGN KEY (league_id) REFERENCES staging.dim_league(league_id) ON DELETE SET NULL
+);
 
-CREATE INDEX IF NOT EXISTS idx_staging_player_stats_team
-    ON staging.player_stats (team);
+CREATE INDEX IF NOT EXISTS idx_dim_team_league_id ON staging.dim_team USING btree (league_id);
 
-CREATE INDEX IF NOT EXISTS idx_staging_player_stats_position
-    ON staging.player_stats (position_standard);
+-- =========================================================
+-- DIMENSION – Joueurs
+-- =========================================================
+CREATE TABLE IF NOT EXISTS staging.dim_player (
+    player_id bigint NOT NULL,
+    player text NOT NULL,
+    name_sofascore text,
+    nationality text,
+    birth_year integer,
+    height smallint,
+    weight smallint,
+    preferred_foot text,
+    position_standard text,
+    position_description text,
+    detailed_positions_current text,
+    position_current text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT dim_player_pkey PRIMARY KEY (player_id),
+    CONSTRAINT dim_player_position_standard_check CHECK ((position_standard = ANY (ARRAY['Goalkeeper'::text, 'Defender'::text, 'Midfielder'::text, 'Forward'::text])))
+);
 
--- ---------------------------------------------------------
--- Commentaires métier
--- ---------------------------------------------------------
-COMMENT ON TABLE  staging.player_stats                      IS 'Données nettoyées et typées prêtes pour la mart – sortie directe de DataTransformer + FeatureEngineer';
-COMMENT ON COLUMN staging.player_stats._raw_batch_id        IS 'Référence au batch raw.player_stats._batch_id ayant produit cette ligne';
-COMMENT ON COLUMN staging.player_stats.season_id            IS 'Année de début de saison (2022 = saison 2022/23)';
-COMMENT ON COLUMN staging.player_stats.involvement_per_90   IS '(xg_chain + xg_buildup) / minutes * 90 – participation globale aux actions offensives';
-COMMENT ON COLUMN staging.player_stats.finishing_efficiency IS 'goals / xg – mesure la sur/sous-performance face au but';
-COMMENT ON COLUMN staging.player_stats.direct_contribution  IS 'goals + assists – contribution directe du joueur';
-COMMENT ON COLUMN staging.player_stats.expected_contribution IS 'xg + xa – contribution attendue du joueur';
-COMMENT ON COLUMN staging.player_stats.offensive_volume     IS 'shots + key_passes – volume offensif du joueur';
+CREATE INDEX IF NOT EXISTS idx_dim_player_age ON staging.dim_player USING btree (birth_year);
+CREATE INDEX IF NOT EXISTS idx_dim_player_name_sofascore ON staging.dim_player USING btree (name_sofascore);
+CREATE INDEX IF NOT EXISTS idx_dim_player_nationality ON staging.dim_player USING btree (nationality);
+CREATE INDEX IF NOT EXISTS idx_dim_player_position ON staging.dim_player USING btree (position_standard);
+
+-- =========================================================
+-- TABLE DE FAITS – Performances par saison
+-- Grain : 1 ligne = 1 joueur × 1 équipe × 1 saison × 1 ligue
+-- =========================================================
+CREATE SEQUENCE IF NOT EXISTS staging.fact_performance_performance_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+CREATE TABLE IF NOT EXISTS staging.fact_performance (
+    performance_id bigint DEFAULT nextval('staging.fact_performance_performance_id_seq'::regclass) NOT NULL,
+    player_id bigint NOT NULL,
+    team_id integer NOT NULL,
+    season_id integer NOT NULL,
+    league_id text NOT NULL,
+    matches smallint DEFAULT 0 NOT NULL,
+    minutes integer DEFAULT 0 NOT NULL,
+    goals smallint DEFAULT 0 NOT NULL,
+    assists smallint DEFAULT 0 NOT NULL,
+    shots smallint DEFAULT 0 NOT NULL,
+    key_passes smallint DEFAULT 0 NOT NULL,
+    yellow_cards smallint DEFAULT 0,
+    red_cards smallint DEFAULT 0,
+    np_goals smallint DEFAULT 0,
+    xg numeric(8,4) DEFAULT 0 NOT NULL,
+    xa numeric(8,4) DEFAULT 0 NOT NULL,
+    xg_chain numeric(8,4) DEFAULT 0,
+    xg_buildup numeric(8,4) DEFAULT 0,
+    np_xg numeric(8,4) DEFAULT 0,
+    goals_per_90 numeric(6,3),
+    xg_per_90 numeric(6,3),
+    np_goals_per_90 numeric(6,3),
+    np_xg_per_90 numeric(6,3),
+    assists_per_90 numeric(6,3),
+    xa_per_90 numeric(6,3),
+    shots_per_90 numeric(6,3),
+    key_passes_per_90 numeric(6,3),
+    involvement_per_90 numeric(6,3),
+    finishing_efficiency numeric(8,4),
+    np_finishing_efficiency numeric(8,4),
+    playmaking_efficiency numeric(8,4),
+    shot_conversion numeric(8,4),
+    involvement_index numeric(10,3),
+    direct_contribution smallint,
+    expected_contribution numeric(8,3),
+    offensive_volume smallint,
+    player_age_at_season smallint,
+    market_value_current numeric(15,2),
+    popularity_score_current integer,
+    contract_end_date_current date,
+    value_per_goal numeric(15,2),
+    value_per_xg numeric(15,2),
+    value_per_contribution numeric(15,2),
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT fact_performance_assists_check CHECK ((assists >= 0)),
+    CONSTRAINT fact_performance_goals_check CHECK ((goals >= 0)),
+    CONSTRAINT fact_performance_key_passes_check CHECK ((key_passes >= 0)),
+    CONSTRAINT fact_performance_matches_check CHECK ((matches >= 0)),
+    CONSTRAINT fact_performance_minutes_check CHECK ((minutes >= 0)),
+    CONSTRAINT fact_performance_np_goals_check CHECK ((np_goals >= 0)),
+    CONSTRAINT fact_performance_red_cards_check CHECK ((red_cards >= 0)),
+    CONSTRAINT fact_performance_shots_check CHECK ((shots >= 0)),
+    CONSTRAINT fact_performance_yellow_cards_check CHECK ((yellow_cards >= 0)),
+    CONSTRAINT fact_performance_pkey PRIMARY KEY (performance_id),
+    CONSTRAINT uq_fact_performance_grain UNIQUE (player_id, team_id, season_id, league_id),
+    CONSTRAINT fact_performance_league_id_fkey FOREIGN KEY (league_id) REFERENCES staging.dim_league(league_id) ON DELETE CASCADE,
+    CONSTRAINT fact_performance_player_id_fkey FOREIGN KEY (player_id) REFERENCES staging.dim_player(player_id) ON DELETE CASCADE,
+    CONSTRAINT fact_performance_season_id_fkey FOREIGN KEY (season_id) REFERENCES staging.dim_season(season_id) ON DELETE CASCADE,
+    CONSTRAINT fact_performance_team_id_fkey FOREIGN KEY (team_id) REFERENCES staging.dim_team(team_id) ON DELETE CASCADE
+);
+
+ALTER SEQUENCE staging.fact_performance_performance_id_seq OWNED BY staging.fact_performance.performance_id;
+
+-- Indexes analytiques
+CREATE INDEX IF NOT EXISTS idx_fact_goals_per_90 ON staging.fact_performance USING btree (goals_per_90 DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_fact_league_id ON staging.fact_performance USING btree (league_id);
+CREATE INDEX IF NOT EXISTS idx_fact_league_season ON staging.fact_performance USING btree (league_id, season_id);
+CREATE INDEX IF NOT EXISTS idx_fact_minutes ON staging.fact_performance USING btree (minutes);
+CREATE INDEX IF NOT EXISTS idx_fact_player_id ON staging.fact_performance USING btree (player_id);
+CREATE INDEX IF NOT EXISTS idx_fact_player_team ON staging.fact_performance USING btree (player_id, team_id);
+CREATE INDEX IF NOT EXISTS idx_fact_season_id ON staging.fact_performance USING btree (season_id);
+CREATE INDEX IF NOT EXISTS idx_fact_season_player ON staging.fact_performance USING btree (season_id, player_id);
+CREATE INDEX IF NOT EXISTS idx_fact_team_id ON staging.fact_performance USING btree (team_id);
+CREATE INDEX IF NOT EXISTS idx_fact_xg_per_90 ON staging.fact_performance USING btree (xg_per_90 DESC NULLS LAST);
+
+-- Foreign Keys already included in CREATE TABLE

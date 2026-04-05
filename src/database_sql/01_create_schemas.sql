@@ -1,5 +1,6 @@
 -- =========================================================
 -- FOOTBALL TALENT DETECTION - POSTGRESQL SCHEMAS
+-- Extrait du backup pgAdmin du 2026-04-04 15:00:17 UTC
 -- =========================================================
 
 -- Création des schémas

@@ -1,162 +1,163 @@
 -- =========================================================
--- MART LAYER  –  Schéma en étoile analytique
--- Objectif : couche optimisée pour le scouting et la BI.
---
---                    dim_player
---                         |
---                         |
---   dim_team ──── fact_performance ──── dim_season
---                         |
---                         |
---                    dim_league
---
--- Conventions :
---   • Clés de substitution (surrogate keys) BIGSERIAL
---   • Clés naturelles préservées pour les lookups ETL
---   • SCD Type 1 (écrasement) sauf indication contraire
---   • Indexes sur FK et colonnes de filtrage fréquent
+-- MART LAYER  –  Vues analytiques et procédures stockées
+-- Extrait du backup pgAdmin du 2026-04-04 15:00:17 UTC
 -- =========================================================
 
 -- =========================================================
--- MART LAYER  – Schéma en étoile analytique
--- Objectif : couche optimisée pour le scouting et la BI.
+-- PROCÉDURE STOCKÉE – Rafraîchissement des statistiques
 -- =========================================================
-
--- =========================================================
--- DIMENSION – Ligues
--- =========================================================
-CREATE TABLE IF NOT EXISTS mart.dim_league (
-    league_id       TEXT       PRIMARY KEY,
-    league          TEXT            NOT NULL UNIQUE,
-    country         TEXT,
-    created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
-);
-
--- =========================================================
--- DIMENSION – Saisons
--- =========================================================
-CREATE TABLE IF NOT EXISTS mart.dim_season (
-    season_id       TEXT       PRIMARY KEY,
-    season_label    TEXT            NOT NULL,
-    created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
-);
+CREATE OR REPLACE PROCEDURE mart.refresh_analytical_marts()
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Objectif : Recalcul et optimisation des tables du Mart
+    -- Cette procédure simule le rafraîchissement d'un entrepôt de données.
+    -- Si nous utilisions des Materialized Views, la syntaxe serait :
+    -- REFRESH MATERIALIZED VIEW mart.mv_player_scouting_profile;
+    
+    -- Pour notre cas avec vue standards (VIEW), nous forçons 
+    -- la mise à jour des statistiques de l'optimiseur Postgres 
+    -- pour garantir que nos nouvelles jointures soient performantes :
+    ANALYZE staging.fact_performance;
+    ANALYZE staging.dim_player;
+    ANALYZE staging.dim_team;
+    
+    RAISE NOTICE 'Analytics Mart indexes and statistics refreshed successfully at %', NOW();
+END;
+$$;
 
 -- =========================================================
--- DIMENSION – Équipes
+-- VUE – Profil de scouting des joueurs
 -- =========================================================
-CREATE TABLE IF NOT EXISTS mart.dim_team (
-    team_id         TEXT       PRIMARY KEY,
-    team            TEXT            NOT NULL,
-    country         TEXT,
-    league_id       TEXT          REFERENCES mart.dim_league(league_id) ON DELETE SET NULL,
-    created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_dim_team_name_league UNIQUE(team, league_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_dim_team_league_id ON mart.dim_team(league_id);
+CREATE OR REPLACE VIEW mart.vw_player_scouting_profile AS
+ WITH player_stats AS (
+         SELECT f.player_id,
+            f.team_id,
+            f.league_id,
+            f.season_id,
+            sum(f.matches) AS matches,
+            sum(f.minutes) AS minutes,
+            sum(f.goals) AS goals,
+            sum(f.assists) AS assists,
+            sum(f.xg) AS xg,
+            sum(f.xa) AS xa,
+            sum(f.yellow_cards) AS yellow_cards,
+            sum(f.red_cards) AS red_cards,
+            max(f.market_value_current) AS market_value_current,
+            sum((f.goals + f.assists)) AS direct_contributions,
+            sum((f.xg + f.xa)) AS expected_contributions,
+            (((sum((f.goals + f.assists)))::numeric - sum((f.xg + f.xa))))::numeric(8,2) AS contribution_margin,
+            ((((sum(f.goals))::numeric / (NULLIF(sum(f.minutes), 0))::numeric) * (90)::numeric))::numeric(5,2) AS goals_p90,
+            (((sum(f.xg) / (NULLIF(sum(f.minutes), 0))::numeric) * (90)::numeric))::numeric(5,2) AS xg_p90
+           FROM staging.fact_performance f
+          WHERE ((f.player_id IS NOT NULL) AND (f.minutes > 0))
+          GROUP BY f.player_id, f.team_id, f.league_id, f.season_id
+        )
+ SELECT p.player AS player_name,
+    p.nationality,
+    (EXTRACT(year FROM CURRENT_DATE) - (p.birth_year)::numeric) AS estimated_age,
+    p.position_standard AS "position",
+    t.team AS team_name,
+    l.league AS league_name,
+    s.season AS season_name,
+    ps.matches,
+    ps.minutes,
+    ps.goals,
+    ps.assists,
+    ps.xg,
+    ps.xa,
+    ps.direct_contributions,
+    ps.expected_contributions,
+    ps.contribution_margin,
+        CASE
+            WHEN (ps.xg > (0)::numeric) THEN (((ps.goals)::numeric / ps.xg))::numeric(5,2)
+            ELSE (0)::numeric
+        END AS finishing_efficiency,
+    ((((ps.yellow_cards + (ps.red_cards * 2)))::numeric / (NULLIF(ps.matches, 0))::numeric))::numeric(5,2) AS discipline_penalty_index,
+    ps.market_value_current,
+        CASE
+            WHEN (((EXTRACT(year FROM CURRENT_DATE) - (p.birth_year)::numeric) <= (23)::numeric) AND (ps.contribution_margin > (0)::numeric) AND (ps.minutes >= 900)) THEN 'Top Prospect'::text
+            WHEN (((EXTRACT(year FROM CURRENT_DATE) - (p.birth_year)::numeric) > (23)::numeric) AND (ps.contribution_margin > (2)::numeric)) THEN 'Elite Performer'::text
+            WHEN (ps.contribution_margin < ('-2'::integer)::numeric) THEN 'Underperforming'::text
+            ELSE 'Standard'::text
+        END AS talent_category
+   FROM ((((player_stats ps
+     JOIN staging.dim_player p ON ((ps.player_id = p.player_id)))
+     JOIN staging.dim_team t ON ((ps.team_id = t.team_id)))
+     JOIN staging.dim_league l ON ((ps.league_id = l.league_id)))
+     JOIN staging.dim_season s ON ((ps.season_id = s.season_id)));
 
 -- =========================================================
--- DIMENSION – Joueurs
+-- VUE – Talents sous-évalués
 -- =========================================================
-CREATE TABLE IF NOT EXISTS mart.dim_player (
-    player_id           TEXT       PRIMARY KEY,
-    player              TEXT            NOT NULL,
-    name_sofascore      TEXT,
-    nationality         TEXT,
-    birth_year          INTEGER,
-    height              SMALLINT        CHECK (height BETWEEN 140 AND 230),
-    weight              SMALLINT        CHECK (weight BETWEEN 40 AND 150),
-    preferred_foot      TEXT            
-    position_standard   TEXT            CHECK (position_standard IN ('Goalkeeper','Defender','Midfielder','Forward')),
-    position_description TEXT,
-    detailed_positions  TEXT,
-    created_at          TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_dim_player_name UNIQUE(player)
-);
-
-CREATE INDEX IF NOT EXISTS idx_dim_player_nationality      ON mart.dim_player(nationality);
-CREATE INDEX IF NOT EXISTS idx_dim_player_position         ON mart.dim_player(position_standard);
-CREATE INDEX IF NOT EXISTS idx_dim_player_name_sofascore   ON mart.dim_player(name_sofascore);
+CREATE OR REPLACE VIEW mart.vw_undervalued_talents AS
+ SELECT p.player AS player_name,
+    p.position_standard AS "position",
+    t.team AS current_team,
+    sum(f.minutes) AS total_minutes,
+    sum((f.goals + f.assists)) AS total_direct_contributions,
+    sum((f.xg + f.xa)) AS total_expected_contributions,
+    max(f.market_value_current) AS known_market_value,
+        CASE
+            WHEN (sum((f.goals + f.assists)) > 0) THEN ((max(f.market_value_current) / (sum((f.goals + f.assists)))::numeric))::numeric(15,2)
+            ELSE NULL::numeric
+        END AS cost_per_contribution
+   FROM ((staging.fact_performance f
+     JOIN staging.dim_player p ON ((f.player_id = p.player_id)))
+     JOIN staging.dim_team t ON ((f.team_id = t.team_id)))
+  WHERE (p.position_standard <> 'Goalkeeper'::text)
+  GROUP BY p.player_id, p.player, p.position_standard, t.team
+ HAVING (((sum((f.goals + f.assists)) >= 10) OR (sum((f.xg + f.xa)) >= (10)::numeric)) AND (max(f.market_value_current) IS NOT NULL))
+  ORDER BY
+        CASE
+            WHEN (sum((f.goals + f.assists)) > 0) THEN ((max(f.market_value_current) / (sum((f.goals + f.assists)))::numeric))::numeric(15,2)
+            ELSE NULL::numeric
+        END;
 
 -- =========================================================
--- TABLE DE FAITS – Performances par saison
--- Grain : 1 ligne = 1 joueur × 1 équipe × 1 saison × 1 ligue
+-- VUE – Efficacité offensive des équipes
 -- =========================================================
-CREATE TABLE IF NOT EXISTS mart.fact_performance (
-    performance_id          BIGSERIAL   PRIMARY KEY,
-
-    -- Clés dimensions
-    player_id               TEXT      NOT NULL REFERENCES mart.dim_player(player_id) ON DELETE CASCADE,
-    team_id                 TEXT      NOT NULL REFERENCES mart.dim_team(team_id) ON DELETE CASCADE,
-    season_id               TEXT      NOT NULL REFERENCES mart.dim_season(season_id) ON DELETE CASCADE,
-    league_id               TEXT      NOT NULL REFERENCES mart.dim_league(league_id) ON DELETE CASCADE,
-
-    -- Statistiques de volume
-    matches                 SMALLINT    NOT NULL DEFAULT 0 CHECK(matches >= 0),
-    minutes                 INTEGER     NOT NULL DEFAULT 0 CHECK(minutes >= 0),
-    goals                   SMALLINT    NOT NULL DEFAULT 0 CHECK(goals >= 0),
-    assists                 SMALLINT    NOT NULL DEFAULT 0 CHECK(assists >= 0),
-    shots                   SMALLINT    NOT NULL DEFAULT 0 CHECK(shots >= 0),
-    key_passes              SMALLINT    NOT NULL DEFAULT 0 CHECK(key_passes >= 0),
-    yellow_cards            SMALLINT             DEFAULT 0 CHECK(yellow_cards >= 0),
-    red_cards               SMALLINT             DEFAULT 0 CHECK(red_cards >= 0),
-    np_goals                SMALLINT             DEFAULT 0 CHECK(np_goals >= 0),
-
-    -- Métriques xG
-    xg                      NUMERIC(8,4)   NOT NULL DEFAULT 0,
-    xa                      NUMERIC(8,4)   NOT NULL DEFAULT 0,
-    xg_chain                NUMERIC(8,4)   DEFAULT 0,
-    xg_buildup              NUMERIC(8,4)   DEFAULT 0,
-    np_xg                   NUMERIC(8,4)   DEFAULT 0,
-
-    -- KPIs per-90
-    goals_per_90            NUMERIC(6,3),
-    xg_per_90               NUMERIC(6,3),
-    np_goals_per_90         NUMERIC(6,3),
-    np_xg_per_90            NUMERIC(6,3),
-    assists_per_90          NUMERIC(6,3),
-    xa_per_90               NUMERIC(6,3),
-    shots_per_90            NUMERIC(6,3),
-    key_passes_per_90       NUMERIC(6,3),
-    involvement_per_90      NUMERIC(6,3),
-
-    -- KPIs efficacité
-    finishing_efficiency    NUMERIC(8,4),
-    np_finishing_efficiency NUMERIC(8,4),
-    playmaking_efficiency   NUMERIC(8,4),
-    shot_conversion         NUMERIC(8,4),
-
-    -- KPIs collectifs
-    involvement_index       NUMERIC(10,3),
-    direct_contribution     SMALLINT,
-    expected_contribution   NUMERIC(8,3),
-    offensive_volume        SMALLINT,
-
-    -- Contexte joueur
-    player_age_at_season    SMALLINT    CHECK(player_age_at_season BETWEEN 10 AND 60),
-    market_value_current    NUMERIC(15,2),
-    popularity_score_current INTEGER    CHECK(popularity_score_current >= 0),
-    contract_end_date_current DATE,
-
-    -- Tracking
-    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    -- Unicité du grain
-    CONSTRAINT uq_fact_performance_grain
-        UNIQUE(player_id, team_id, season_id, league_id)
-);
-
--- Indexes analytiques
-CREATE INDEX IF NOT EXISTS idx_fact_player_id       ON mart.fact_performance(player_id);
-CREATE INDEX IF NOT EXISTS idx_fact_team_id         ON mart.fact_performance(team_id);
-CREATE INDEX IF NOT EXISTS idx_fact_season_id       ON mart.fact_performance(season_id);
-CREATE INDEX IF NOT EXISTS idx_fact_league_id       ON mart.fact_performance(league_id);
-CREATE INDEX IF NOT EXISTS idx_fact_league_season   ON mart.fact_performance(league_id, season_id);
-CREATE INDEX IF NOT EXISTS idx_fact_season_player   ON mart.fact_performance(season_id, player_id);
-CREATE INDEX IF NOT EXISTS idx_fact_xg_per_90       ON mart.fact_performance(xg_per_90 DESC NULLS LAST);
-CREATE INDEX IF NOT EXISTS idx_fact_goals_per_90    ON mart.fact_performance(goals_per_90 DESC NULLS LAST);
+CREATE OR REPLACE VIEW mart.vw_team_offensive_efficiency AS
+ WITH team_stats AS (
+         SELECT l.league_id,
+            l.league AS league_name,
+            s.season_id,
+            s.season AS season_name,
+            t.team AS team_name,
+            sum(f.goals) AS team_goals,
+            sum(f.xg) AS team_xg,
+            sum(f.shots) AS team_shots
+           FROM (((staging.fact_performance f
+             JOIN staging.dim_team t ON ((f.team_id = t.team_id)))
+             JOIN staging.dim_league l ON ((f.league_id = l.league_id)))
+             JOIN staging.dim_season s ON ((f.season_id = s.season_id)))
+          GROUP BY l.league_id, l.league, s.season_id, s.season, t.team
+        ), league_avg AS (
+         SELECT team_stats.league_id,
+            team_stats.season_id,
+            avg(team_stats.team_goals) AS avg_league_goals,
+            avg(team_stats.team_xg) AS avg_league_xg
+           FROM team_stats
+          GROUP BY team_stats.league_id, team_stats.season_id
+        )
+ SELECT ts.league_name,
+    ts.season_name,
+    ts.team_name,
+    ts.team_goals,
+    ts.team_xg,
+    ts.team_shots,
+        CASE
+            WHEN (ts.team_shots > 0) THEN (((ts.team_goals)::numeric / (ts.team_shots)::numeric))::numeric(4,2)
+            ELSE (0)::numeric
+        END AS shot_conversion_rate,
+    (la.avg_league_goals)::numeric(6,2) AS avg_league_goals,
+    (((ts.team_goals)::numeric - la.avg_league_goals))::numeric(6,2) AS goals_vs_average,
+        CASE
+            WHEN (((ts.team_goals)::numeric > la.avg_league_goals) AND ((ts.team_goals)::numeric > ts.team_xg)) THEN 'Overperforming & Above Average'::text
+            WHEN (((ts.team_goals)::numeric > la.avg_league_goals) AND ((ts.team_goals)::numeric <= ts.team_xg)) THEN 'Underperforming but Above Average'::text
+            WHEN ((ts.team_goals)::numeric < la.avg_league_goals) THEN 'Below Average'::text
+            ELSE 'Average'::text
+        END AS team_performance_status
+   FROM (team_stats ts
+     JOIN league_avg la ON (((ts.league_id = la.league_id) AND (ts.season_id = la.season_id))))
+  ORDER BY ts.league_name, ts.season_name, ts.team_goals DESC;
