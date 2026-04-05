@@ -420,7 +420,7 @@ def main():
 
     with col_info:
 
-        st.caption("Les données sont automatiquement mises à jour toutes les 60 secondes")
+        st.caption("Les données sont automatiquement mises à jour en cliquant sur ce bouton")
 
     
 
@@ -466,15 +466,18 @@ def main():
 
     selected_league = st.sidebar.selectbox("📍 Ligue", leagues)
 
-    
-
     # Filtre par team
-
-    teams = ['Toutes'] + sorted(df_players_new_season['team'].dropna().unique().tolist())
+    if selected_league == 'Toutes':
+        teams = ['Toutes'] + sorted(df_players_new_season['team'].dropna().unique().tolist())
+    else:
+        teams = ['Toutes'] + sorted(
+            df_players_new_season[
+                df_players_new_season['league'] == selected_league
+            ]['team'].dropna().unique().tolist()
+        )
 
     selected_team = st.sidebar.selectbox("📍 Team", teams)
 
-    
 
     # Filtre par âge
 
@@ -1058,6 +1061,384 @@ def main():
 
             st.plotly_chart(fig_radar, use_container_width=True)
 
+    st.divider()
+
+    # =========================================================
+    # Aperçu des meilleurs des meilleurs talents de milieux
+    # =========================================================
+
+    st.header("🌟 Aperçu des Meilleurs Talents de Milieux")
+
+    df_midfielders = df_filtered[
+    df_filtered['position_standard'] == 'Midfielder'].copy()
+
+    # Nettoyage minimal pour les milieux
+    df_midfielders = df_midfielders.dropna(subset=[
+        'assists', 'xa', 
+        'involvement_index', 'market_value_current'
+    ])
+
+    df_top_midfielders = df_midfielders.copy()
+
+    # Score de talent adapté pour les milieux
+    df_top_midfielders['midfield_talent_score'] = (
+        df_top_midfielders['assists_per_90'] * 0.3 +
+        df_top_midfielders['xa_per_90'] * 0.3 +
+        df_top_midfielders['involvement_per_90'] * 0.2 +
+        df_top_midfielders['key_passes_per_90'] * 0.2
+    )
+
+    # Trier
+    df_top_midfielders = df_top_midfielders.sort_values(
+        by='midfield_talent_score',
+        ascending=False
+    )
+
+    df_undervalued_midfielders = df_top_midfielders[
+        df_top_midfielders['market_value_current'] > 0
+    ]
+
+    # 1. Calculer le seuil du top 10% (0.90 quantile)
+    threshold_midfield_top = df_undervalued_midfielders['midfield_talent_score'].quantile(0.90)
+
+    # 2. Filtrer les joueurs supérieurs à ce seuil
+    df_undervalued_midfielders = df_undervalued_midfielders[
+        df_undervalued_midfielders['midfield_talent_score'] > threshold_midfield_top
+    ]
+
+    # Trier (market value la plus petite en premier)
+    df_undervalued_midfielders = df_undervalued_midfielders.sort_values(
+        by='market_value_current',
+        ascending=True
+    )
+
+    tab3, tab4 = st.tabs([
+    "🌟 Top Talents Milieux",
+    "💎 Milieux Sous-évalués"
+    ])
+
+    with tab3:
+        st.subheader("🌟 Meilleurs Milieux (Talent)")
+
+        df_display_mid = df_top_midfielders.head(40).copy()
+        df_display_mid['market_value_current'] = df_display_mid['market_value_current'].apply(format_currency)
+
+        st.dataframe(
+            df_display_mid[[
+                'player', 'team', 'league','market_value_current',
+                'player_age_at_season','detailed_positions_current','matches','assists','goals',
+                'midfield_talent_score','contract_end_date_current',
+                'key_passes_per_90', 
+                'assists_per_90','xa', 'xa_per_90','playmaking_efficiency',
+                'involvement_per_90','xg_chain','xg_buildup'
+            ]],
+            hide_index=True,
+            use_container_width=True
+        )
+
+        col3, col4 = st.columns(2)
+
+        # =========================
+        # 📈 Evolution du Talent Score
+        # =========================
+        with col3:
+            top5_mid_players = df_top_midfielders.head(5)['player'].unique()
+
+            df_evolution_mid = df_players[
+                (df_players['player'].isin(top5_mid_players)) &
+                (df_players['position_standard'] == 'Midfielder')
+            ].copy()
+
+            df_evolution_mid['midfield_talent_score'] = (
+                df_evolution_mid['assists_per_90'] * 0.3 +
+                df_evolution_mid['xa_per_90'] * 0.3 +
+                df_evolution_mid['involvement_per_90'] * 0.2 +
+                df_evolution_mid['key_passes_per_90'] * 0.2
+            )
+
+            df_evolution_mid = df_evolution_mid.sort_values('season_id')
+
+            df_evolution_mid['season_display'] = (
+                df_evolution_mid['season_id'].astype(str) + 
+                '/' + 
+                (df_evolution_mid['season_id'] + 1).astype(str)
+            )
+
+            fig_evolution_mid = px.line(
+                df_evolution_mid,
+                x='season_display', 
+                y='expected_contribution',
+                color='player',
+                markers=True,
+                title="📈 Évolution de la contribution attendue (xA + xG)",
+                category_orders={"season_display": df_evolution_mid['season_display'].tolist()}
+            )
+
+            if len(df_evolution_mid) > 0:
+                fig_evolution_mid.add_annotation(
+                    x=df_evolution_mid['season_display'].max(),
+                    y=df_evolution_mid['expected_contribution'].max(),
+                    text="⚠️ Saison 2025/2026 en cours",
+                    showarrow=True,
+                    arrowhead=1,
+                    ax=-30,
+                    ay=-30,
+                    font=dict(color="orange", size=11)
+                )
+
+            st.plotly_chart(fig_evolution_mid, use_container_width=True)
+
+        # =========================
+        # 🕸️ Radar Chart
+        # =========================
+        with col4:
+            metrics_mid = [
+                'assists_per_90',
+                'xa_per_90',
+                'key_passes_per_90',
+                'involvement_per_90',
+                'playmaking_efficiency'
+            ]
+
+            df_radar_mid = df_top_midfielders.head(5).copy()
+
+            # 🔥 Normalisation
+            if not df_radar_mid.empty:
+                df_radar_mid[metrics_mid] = df_radar_mid[metrics_mid] / df_radar_mid[metrics_mid].max().replace(0, 1)
+
+            fig_radar_mid = go.Figure()
+
+            for _, row in df_radar_mid.iterrows():
+                values = [row[m] for m in metrics_mid]
+                values += [values[0]]
+
+                fig_radar_mid.add_trace(go.Scatterpolar(
+                    r=values,
+                    theta=metrics_mid + [metrics_mid[0]],
+                    fill='toself',
+                    name=row['player']
+                ))
+
+            fig_radar_mid.update_layout(
+                polar=dict(radialaxis=dict(visible=True)),
+                title="🕸️ Profil Radar Top 5 Milieux"
+            )
+
+            st.plotly_chart(fig_radar_mid, use_container_width=True)
+
+    with tab4:
+        st.subheader("💎 Milieux Sous-évalués")
+
+        df_display_mid_under = df_undervalued_midfielders.head(40).copy()
+        df_display_mid_under['market_value_current'] = df_display_mid_under['market_value_current'].apply(format_currency)
+
+        st.dataframe(
+            df_display_mid_under[[
+                'player', 'team', 'league','market_value_current',
+                'player_age_at_season','detailed_positions_current','matches','assists','goals',
+                'midfield_talent_score','contract_end_date_current',
+                'key_passes_per_90', 
+                'assists_per_90','xa', 'xa_per_90','playmaking_efficiency',
+                'involvement_per_90','xg_chain','xg_buildup'
+            ]],
+            hide_index=True,
+            use_container_width=True
+        )
+
+        col5, col6 = st.columns(2)
+
+        # =========================
+        # 📈 Evolution (Top 5 undervalued)
+        # =========================
+        with col5:
+            top5_players_mid_under = df_undervalued_midfielders.head(5)['player'].unique()
+
+            df_evolution_mid_under = df_players[
+                (df_players['player'].isin(top5_players_mid_under)) &
+                (df_players['position_standard'] == 'Midfielder')
+            ].copy()
+
+            df_evolution_mid_under['midfield_talent_score'] = (
+                df_evolution_mid_under['assists_per_90'] * 0.3 +
+                df_evolution_mid_under['xa_per_90'] * 0.3 +
+                df_evolution_mid_under['involvement_per_90'] * 0.2 +
+                df_evolution_mid_under['key_passes_per_90'] * 0.2
+            )
+
+            df_evolution_mid_under = df_evolution_mid_under.sort_values('season_id')
+
+            df_evolution_mid_under['season_display'] = (
+                df_evolution_mid_under['season_id'].astype(str) + 
+                '/' + 
+                (df_evolution_mid_under['season_id'] + 1).astype(str)
+            )
+
+            fig_evolution_mid_under = px.line(
+                df_evolution_mid_under,
+                x='season_display', 
+                y='expected_contribution',
+                color='player',
+                markers=True,
+                title="📈 Évolution Contribution Attendue (Sous-évalués)",
+                category_orders={"season_display": df_evolution_mid_under['season_display'].tolist()}
+            )
+
+            if len(df_evolution_mid_under) > 0:
+                fig_evolution_mid_under.add_annotation(
+                    x=df_evolution_mid_under['season_display'].max(),
+                    y=df_evolution_mid_under['expected_contribution'].max(),
+                    text="⚠️ Saison en cours",
+                    showarrow=True,
+                    arrowhead=1,
+                    ax=-30,
+                    ay=-30,
+                    font=dict(color="orange", size=11)
+                )
+
+            st.plotly_chart(fig_evolution_mid_under, use_container_width=True)
+
+        # =========================
+        # 🕸️ Radar Chart (Top 5 undervalued)
+        # =========================
+        with col6:
+            metrics_mid_under = [
+                'assists_per_90',
+                'xa_per_90',
+                'key_passes_per_90',
+                'involvement_per_90',
+                'playmaking_efficiency'
+            ]
+
+            df_radar_mid_under = df_undervalued_midfielders.head(5).copy()
+
+            # 🔥 Normalisation
+            if not df_radar_mid_under.empty:
+                df_radar_mid_under[metrics_mid_under] = df_radar_mid_under[metrics_mid_under] / df_radar_mid_under[metrics_mid_under].max().replace(0, 1)
+
+            fig_radar_mid_under = go.Figure()
+
+            for _, row in df_radar_mid_under.iterrows():
+                values = [row[m] for m in metrics_mid_under]
+                values += [values[0]]
+
+                fig_radar_mid_under.add_trace(go.Scatterpolar(
+                    r=values,
+                    theta=metrics_mid_under + [metrics_mid_under[0]],
+                    fill='toself',
+                    name=row['player']
+                ))
+
+            fig_radar_mid_under.update_layout(
+                polar=dict(radialaxis=dict(visible=True)),
+                title="🕸️ Profil Radar Milieux Sous-évalués"
+            )
+
+            st.plotly_chart(fig_radar_mid_under, use_container_width=True)
+
+    st.divider()
+
+    # =========================================================
+    # Recommandations Stratégiques 
+    # =========================================================
+    st.header("💡 Recommandations Stratégiques Détaillées")
+    
+    col_rec1, col_rec2 = st.columns(2)
+    
+    with col_rec1:
+        st.info("**🎯 Focus Attaque : Opportunités de Marché**")
+        st.write("Analyse détaillée des profils offensifs sous-évalués basée sur la production, l'efficacité et l'implication dans le jeu :")
+
+        if not df_undervalued_forwards.empty:
+            top_forwards_list = df_undervalued_forwards.head(5)
+
+            for i, (_, row) in enumerate(top_forwards_list.iterrows(), 1):
+
+                # 🔍 Analyse du profil
+                profile = ""
+                
+                if row['goals_per_90'] > row['xg_per_90']:
+                    profile += "Finisseur clinique 🔥. "
+                elif row['xg_per_90'] > 0.5:
+                    profile += "Générateur d'occasions de haute qualité 🎯. "
+                
+                if row['shots_per_90'] > 3:
+                    profile += "Très actif dans la surface (volume de tirs élevé). "
+                
+                if row['involvement_per_90'] > 0.6:
+                    profile += "Fortement impliqué dans le jeu offensif. "
+
+                if row['finishing_efficiency'] > 1:
+                    profile += "Surperformance devant le but (efficacité supérieure aux attentes). "
+
+                # 💰 Analyse valeur
+                value_note = ""
+                if row['market_value_current'] < df_undervalued_forwards['market_value_current'].median():
+                    value_note = "💎 Opportunité marché majeure (prix sous-évalué)."
+
+                st.markdown(
+                    f"""
+                    **{i}. {row['player']}** ({row['team']}) — **{format_currency(row['market_value_current'])}**
+
+                    ➤ **Profil :** {profile}
+
+                    ➤ **Performance :**
+                    - ⚽ {row['goals_per_90']:.2f} buts / 90 min  
+                    - 🎯 xG : {row['xg_per_90']:.2f} | Tirs : {row['shots_per_90']:.2f}  
+                    - 🔗 Implication : {row['involvement_per_90']:.2f}
+
+                    ➤ **Analyse Scout :**
+                    Joueur avec un **attack_talent_score de {row['attack_talent_score']:.2f}**, combinant production offensive et présence dans les phases de jeu. {value_note}
+                    """
+                                )
+        else:
+            st.markdown("Aucun attaquant sous-évalué pertinent trouvé.")
+
+    with col_rec2:
+        st.success("**🧠 Focus Milieux : Créateurs de Classe Élite**")
+        st.write("Analyse des milieux créatifs basée sur la vision de jeu, la création d'occasions et l'implication collective :")
+
+        if not df_undervalued_midfielders.empty:
+            top_mids_list = df_undervalued_midfielders.head(5)
+
+            for i, (_, row) in enumerate(top_mids_list.iterrows(), 1):
+
+                # 🔍 Profil
+                profile = ""
+
+                if row['key_passes_per_90'] > 2:
+                    profile += "Créateur élite 🧠. "
+
+                if row['xa_per_90'] > 0.3:
+                    profile += "Très forte capacité à générer des occasions. "
+
+                if row['xg_buildup'] > df_undervalued_midfielders['xg_buildup'].mean():
+                    profile += "Impact majeur dans la construction du jeu. "
+
+                if row['involvement_per_90'] > 0.6:
+                    profile += "Milieu moteur dans les phases offensives. "
+
+                # 💰 valeur
+                value_note = ""
+                if row['market_value_current'] < df_undervalued_midfielders['market_value_current'].median():
+                    value_note = "💎 Profil à fort potentiel de plus-value."
+
+                st.markdown(
+                    f"""
+                        **{i}. {row['player']}** ({row['team']}) — **{format_currency(row['market_value_current'])}**
+
+                        ➤ **Profil :** {profile}
+
+                        ➤ **Performance :**
+                        - 🎯 Passes clés : {row['key_passes_per_90']:.2f} / 90  
+                        - 🧠 xA : {row['xa_per_90']:.2f}  
+                        - 🔗 xG Buildup : {row['xg_buildup']:.2f}
+
+                        ➤ **Analyse Scout :**
+                        Avec un **midfield_talent_score de {row['midfield_talent_score']:.2f}**, ce joueur apporte créativité, progression et vision de jeu. {value_note}
+                        """
+                                    )
+        else:
+            st.markdown("Aucun milieu sous-évalué trouvé.")
 
 if __name__ == "__main__":
     main()
