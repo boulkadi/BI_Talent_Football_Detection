@@ -1,7 +1,32 @@
 version: "3.9"
 
+# Variables communes pour Airflow
+x-airflow-common: &airflow-common
+  build:
+    context: .. # Important : remonte à la racine
+    dockerfile: docker/Dockerfile
+  environment:
+    - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow_user:airflow_pass@postgres_internal:5432/airflow_db
+    - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+    - PYTHONPATH=/opt/airflow
+    - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    - DATABASE_URL=postgresql://airflow_worker:airflow_pass@postgres_airflow:5432/football_airflow_db
+  volumes:
+    - ../dags:/opt/airflow/dags
+    - ../src:/opt/airflow/src
+    - ../data:/opt/airflow/data
+    - ../logs:/opt/airflow/logs
+    - ../pyproject.toml:/opt/airflow/pyproject.toml
+    - ../uv.lock:/opt/airflow/uv.lock
+  networks:
+    - football_net
+  depends_on:
+    - postgres_internal
+    - postgres_airflow
+
 services:
 
+  # Services des bases de données
   postgres:
     image: postgres:15
     container_name: football_postgres
@@ -34,7 +59,70 @@ services:
     networks:
       - football_net
     depends_on:
-      - postgres
+      - postgres_airflow
+
+  postgres_airflow:
+    image: postgres:15
+    container_name: football_airflow
+    environment:
+      POSTGRES_USER: airflow_worker
+      POSTGRES_PASSWORD: airflow_pass
+      POSTGRES_DB: football_airflow_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_airflow_data:/var/lib/postgresql/data
+      - ../src/database_sql:/docker-entrypoint-initdb.d # Initialise les schémas
+    networks:
+      - football_net
+
+  postgres_internal:
+    image: postgres:15
+    container_name: airflow_internal_db
+    environment:
+      POSTGRES_USER: airflow_user
+      POSTGRES_PASSWORD: airflow_pass
+      POSTGRES_DB: airflow_db
+    networks:
+      - football_net
+
+  # Les services Airflow
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: football_airflow_web
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: [ "CMD", "curl", "--fail", "http://localhost:8080/health" ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: always
+    depends_on:
+      postgres_internal:
+        condition: service_started
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: football_airflow_scheduler
+    command: scheduler
+    depends_on:
+      postgres_internal:
+        condition: service_started
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: football_airflow_init
+    command: >
+      bash -c " airflow db migrate && airflow users create --role Admin --username admin --email admin@example.com --firstname Admin --lastname User --password admin "
+    depends_on:
+      postgres_internal:
+        condition: service_started
 
 networks:
   football_net:
@@ -42,3 +130,4 @@ networks:
 
 volumes:
   postgres_data:
+  postgres_airflow_data:

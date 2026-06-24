@@ -673,7 +673,7 @@ def main():
 
     # =========================================================
 
-    st.header("👀 Aperçu des Données Joueurs")
+    st.header(" Aperçu des Données Joueurs")
 
     # Afficher un aperçu des données filtrées qui ne contient aucun valeur nulle ou None ordonés par market_value_current (important pour le scouting) et contribution_margin (important pour la détection de talents)
 

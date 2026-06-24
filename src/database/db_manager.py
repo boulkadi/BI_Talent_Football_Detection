@@ -10,7 +10,10 @@ class DatabaseManager:
     def __init__(self):
         # Format attendu dans le .env : 
         # postgresql://user:password@host:port/dbname
-        self.db_url = os.getenv('DATABASE_URL') or "postgresql://football_user:football_pass@localhost:5432/football_db"
+        # self.db_url = os.getenv('DATABASE_URL') or "postgresql://football_user:football_pass@localhost:5432/football_db"
+        # Sécurité : Par défaut, on se connecte à la base "sandbox" (football_airflow_db) 
+        # exposée sur le port 5433 de la machine locale, pour ne jamais polluer la prod par erreur.
+        self.db_url = os.getenv('DATABASE_URL') or "postgresql://airflow_worker:airflow_pass@localhost:5433/football_airflow_db"
         if not self.db_url:
             raise ValueError("Erreur : DATABASE_URL non trouvée dans le fichier .env")
 
