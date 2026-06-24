@@ -14,7 +14,7 @@ Une présentation complète du pipeline ETL et du projet est disponible ici :
 
 ## 🏗️ Architecture
  
-![Architecture & Stack Technique](.images_Football_Talents/project_workflow_stack_technique.svg)
+![Architecture & Stack Technique](./images_Football_Talents/project_workflow_stack_technique.svg)
  
 ---
 
