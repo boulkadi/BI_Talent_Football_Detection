@@ -4,6 +4,20 @@
 
 ---
 
+## 🎬 Démonstration
+ 
+Une présentation complète du pipeline ETL et du projet est disponible ici :
+ 
+▶️ **[ETL Pipeline - Football Talent Detection (YouTube)](https://www.youtube.com/watch?v=JscKGW_byt4&t=129s)**
+ 
+---
+
+## 🏗️ Architecture
+ 
+![Architecture & Stack Technique](.images_Football_Talents/project_workflow_stack_technique.svg)
+ 
+---
+
 ## 📑 Table des matières
 1. [Aperçu du Projet](#aperçu-du-projet)
 2. [Stack Technique](#stack-technique)
